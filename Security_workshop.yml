@@ -1,0 +1,392 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  Network Template: Template with an VPC and EC2 instance
+
+# This template creates:
+#   VPC
+#   Internet Gateway
+#   Public Route Table
+#   Public Subnet
+#   Private Subnet
+
+######################
+# Resources section
+######################
+
+#Parameters:
+
+#  KeyName:
+#    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+#    Type: AWS::EC2::KeyPair::KeyName
+#    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+
+#  InstanceType:
+#    Description: WebServer EC2 instance type
+#    Type: String
+#    Default: t2.micro
+#    AllowedValues: [t2.nano, t2.micro, t2.small, t2.medium, t2.large, t2.xlarge, t2.2xlarge,
+#      t3.nano, t3.micro, t3.small, t3.medium, t3.large, t3.xlarge, t3.2xlarge,
+#      m4.large, m4.xlarge, m4.2xlarge, m4.4xlarge, m4.10xlarge,
+#      m5.large, m5.xlarge, m5.2xlarge, m5.4xlarge,
+#      c5.large, c5.xlarge, c5.2xlarge, c5.4xlarge, c5.9xlarge,
+#      g3.8xlarge,
+#      r5.large, r5.xlarge, r5.2xlarge, r5.4xlarge, r3.12xlarge,
+#      i3.xlarge, i3.2xlarge, i3.4xlarge, i3.8xlarge,
+#      d2.xlarge, d2.2xlarge, d2.4xlarge, d2.8xlarge]
+#    ConstraintDescription: must be a valid EC2 instance type.
+  
+
+#  SSHLocation:
+#    Description: The IP address range that can be used to SSH to the EC2 instances
+#    Type: String
+#    MinLength: 9
+#    MaxLength: 18
+#    Default: 0.0.0.0/0
+#    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+#    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
+
+#  LatestAmiId:
+#    Type:  'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+#    Default: '/aws/service/ami-amazon-linux-latest/amzn-ami-hvm-x86_64-gp2'
+
+Resources:
+
+  ## VPC
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      CidrBlock: 10.0.0.0/16
+      Tags:
+        - 
+          Key: "Name"
+          Value: "Security workshop VPC"
+      
+  ## Internet Gateway
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  
+
+  ## Public Route Table
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC      
+      Tags:
+        - 
+          Key: "Name"
+          Value: "security Public Route"
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  ## Public Subnet
+  
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.0.0.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - 
+          Key: "Name"
+          Value: "security Public Subnet1"
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: 10.0.128.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - 
+          Key: "Name"
+          Value: "security Public Subnet2"
+
+  ## Route Table Association to subnets
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+    DependsOn: "PublicRouteTable"
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+    DependsOn: "PublicRouteTable" 
+
+  ## NACL Association to subnets
+
+  PublicSubnetNetworkAclAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      NetworkAclId: !GetAtt 
+        - VPC
+        - DefaultNetworkAcl 
+
+  PublicSubnet2NetworkAclAssociation:
+    Type: AWS::EC2::SubnetNetworkAclAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      NetworkAclId: !GetAtt 
+        - VPC
+        - DefaultNetworkAcl  
+
+  ## NAT Gateway EIP
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: VPCGatewayAttachment
+    Properties:
+        Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1  
+
+  ## Private Route Table
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: "Name"
+          Value: "security Private Route"
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    DependsOn: NatGateway
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  ## Private Subnet
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        -
+          Key: "Name"
+          Value: "security Private Subnet1"
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: 10.0.129.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - 
+          Key: "Name"
+          Value: "security Private Subnet2"
+
+
+  ## Route Table Association to subnets
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+    DependsOn: "PrivateRouteTable"
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+    DependsOn: "PrivateRouteTable"
+
+  ## Security Group for EC2
+
+  WebSecurityGroup:  
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: "WebSecurityGroup"
+      GroupDescription: "Security group with allow HTTP"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  ## Security Group for RDS
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: "DBSecurityGroup"
+      GroupDescription: "DB-Security-Group"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - SourceSecurityGroupId : !Ref WebSecurityGroup
+          IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+      GroupDescription: test
+      Tags:
+      -  
+        Key: "Name"
+        Value: "RDS Security Group" 
+
+  ## Security Group for ALB
+
+  ALBSecurityGroup:  
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: "ALB SG"
+      GroupDescription: "Security group with allow HTTP"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Subnets:
+      - Ref: PublicSubnet1
+      - Ref: PublicSubnet2 
+      SecurityGroups:
+      - Ref: ALBSecurityGroup
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref ALBTargetGroup
+      LoadBalancerArn:
+        Ref: ApplicationLoadBalancer
+      Port: '80'
+      Protocol: HTTP
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 5
+      VpcId: !Ref VPC
+
+
+  ## EC2 instance details
+
+#  EC2Instance:
+#    Type: AWS::EC2::Instance
+#    Properties:
+#      SubnetId: !Ref 'PublicSubnet1'
+#      InstanceType: !Ref 'InstanceType'
+#      SecurityGroupIds: [!Ref 'WebSecurityGroup']
+#      KeyName: !Ref 'KeyName'
+#      ImageId: !Ref 'LatestAmiId'
+#      UserData:
+#        Fn::Base64: !Sub |
+#          #!/bin/bash
+#          # Install Apache Web Server and PHP 
+#          yum install -y php72 wget httpd24
+#          # Download Lab files 
+#          wget https://raw.githubusercontent.com/ecloudvalley/How-to-build-an-elastic-structure/master/index.php
+#          mv index.php /var/www/html/
+#          # Turn on web server 
+#          chkconfig httpd on 
+#          service httpd start
+#      Tags:
+#        - 
+#          Key: "Name"
+#          Value: "Test Instance"
+
+
+
+######################
+# Outputs section
+######################
+
+Outputs:
+
+  VPC:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub '${AWS::StackName}-VPCID'
+  
+  PublicSubnet1:
+    Description: The subnet ID to use for public web servers
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub '${AWS::StackName}-Subnet1ID' 
+
+#  InstanceId:
+#    Description: InstanceId of the newly created EC2 instance
+#    Value: !Ref 'EC2Instance'
+
+#  AZ:
+#    Description: Availability Zone of the newly created EC2 instance
+#    Value: !GetAtt [EC2Instance, AvailabilityZone]
+
+#  PublicDNS:
+#    Description: Public DNSName of the newly created EC2 instance
+#    Value: !GetAtt [EC2Instance, PublicDnsName]
+
+#  PublicIP:
+#    Description: Public IP address of the newly created EC2 instance
+#    Value: !GetAtt [EC2Instance, PublicIp]
+
+  PrivateSubnet1:
+    Description: The subnet 1 ID to use for private web servers
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub '${AWS::StackName}-Subnet3ID'
+
+  PrivateSubnet2:
+    Description: The subnet 2 ID to use for private web servers
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub '${AWS::StackName}-Subnet4ID'
